@@ -1,6 +1,6 @@
 // Circuit Rush game server.
 // TCP (port 5000): login, lobby, rooms, race start/end, laps, finish, items — anything that must arrive, in order.
-// UDP (port 5000 too: TCP and UDP port numbers are separate): kart positions (~30/s) and ping/heartbeat — fast, latest packet wins, loss is fine.
+// Kart positions (~30/s) switch between TCP and UDP during a race; control events always use TCP.
 // The server is the referee: it decides who is in which room, when a race starts, the finish order,
 // who got an item box, which item hit counts, and the points.
 const net = require('net');
@@ -12,13 +12,14 @@ const WEB_PORT = +process.env.WEB_PORT || 8080;      // browser link (bonus)
 const MAX_PLAYERS = 3;          // humans per room; the 8-kart grid is filled with bots
 const KARTS = 8;
 const CHARS = 8;
-const HEARTBEAT_TIMEOUT = 3000; // ms without any UDP packet => player is considered gone
+const HEARTBEAT_TIMEOUT = 3000; // ms without traffic on either transport
 const MIN_LAP_MS = 10000;       // anti-cheat: a lap faster than this is rejected
 const POINTS = [10, 8, 6, 5, 4, 3, 2, 1];
 
 const players = new Map(); // id -> { id, name, sock, udp, room, char, lastSeen }
 const rooms = new Map();   // id -> { id, name, laps, host, players: [id], state, race, scores }
 let nextId = 1;
+let nextRaceId = 1;
 
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 const clean = (v, n) => String(v || '').replace(/[^\w .\-']/g, '').trim().slice(0, n); // names are shown in the UI
@@ -71,6 +72,13 @@ function handle(p, m) {
     return send(p, { t: 'rooms', rooms: roomList() });
   }
   if (!players.has(p.id)) return; // everything below needs a login
+  p.lastSeen = Date.now();
+  if (m.t === 'ping') return send(p, { t: 'pong', ts: m.ts, protocol: 'tcp' });
+  if (m.t === 'transport') {
+    if (['tcp', 'udp'].includes(m.protocol)) p.protocol = m.protocol;
+    return;
+  }
+  if (m.t === 's') return handleState(p, m, 'tcp');
   const room = rooms.get(p.room);
 
   switch (m.t) {
@@ -192,11 +200,12 @@ function startRace(room, m) {
   if ([1, 3, 5].includes(m.laps)) room.laps = m.laps;
   room.state = 'loading';
   room.race = {
+    id: nextRaceId++, lastSeq: new Map(),
     grid, loaded: new Set(), goAt: 0, order: [], boxes: new Map(), hits: new Set(),
     karts: grid.map(() => ({ lap: 1, lapAt: 0, time: null, progress: 0 })),
   };
   log(`race start in room #${room.id} (${humans.map((h) => h.name).join(', ')})`);
-  toRoom(room, { t: 'race_start', grid, laps: room.laps, difficulty: ['easy', 'normal', 'hard'].includes(m.difficulty) ? m.difficulty : 'normal' });
+  toRoom(room, { t: 'race_start', raceId: room.race.id, grid, laps: room.laps, difficulty: ['easy', 'normal', 'hard'].includes(m.difficulty) ? m.difficulty : 'normal' });
   setTimeout(() => { if (room.state === 'loading') go(room); }, 10000); // don't wait forever for a slow PC
   pushRooms();
 }
@@ -249,29 +258,54 @@ const udp = dgram.createSocket('udp4');
 udp.on('message', (buf, rinfo) => {
   let m;
   try { m = JSON.parse(buf); } catch { return; }
-  const p = players.get(m.id);
+  const p = players.get(m?.id);
   if (!p) return;
   p.lastSeen = Date.now();
   p.udp = rinfo; // remember the address the packets really come from (works behind NAT)
-  if (m.t === 'ping') return udp.send(JSON.stringify({ t: 'pong', ts: m.ts }), rinfo.port, rinfo.address);
-  if (m.t !== 's') return;
+  if (m.t === 'ping') return sendDatagram(p, { t: 'pong', ts: m.ts, protocol: 'udp' });
+  if (m.t === 's') handleState(p, m, 'udp');
+});
+
+function sendDatagram(p, m) {
+  if (p?.udp) udp.send(JSON.stringify(m), p.udp.port, p.udp.address, () => {});
+}
+
+// Same payload and authority checks on both transports. Each receiver chooses its downlink.
+function handleState(p, m, protocol) {
   const room = rooms.get(p.room);
-  if (!room || room.state !== 'racing' || !Array.isArray(m.k)) return;
+  if (!room || room.state !== 'racing' || m.raceId !== room.race.id || !Array.isArray(m.k)
+      || !Number.isSafeInteger(m.seq) || m.seq < 0) return;
+  const race = room.race;
+  const states = m.k.filter((s) => {
+    if (!Array.isArray(s) || s.length !== 9 || !s.every(Number.isFinite)) return false;
+    const g = race.grid[s[0]];
+    return g && (g.owner === p.id || (g.owner == null && room.host === p.id));
+  });
+  if (!states.length) return;
+  // Application ACK travels back over the transport on which this update arrived.
+  if (m.measure === true) {
+    const ack = { t: 'state_ack', raceId: race.id, seq: m.seq, protocol };
+    if (protocol === 'tcp') send(p, ack); else sendDatagram(p, ack);
+  }
+  if (m.seq <= (race.lastSeq.get(p.id) ?? -1)) return;
+  race.lastSeq.set(p.id, m.seq);
   // keep each kart's progress (lap + track position) to rank karts that did not finish
-  for (const s of m.k) { const k = room.race.karts[s[0]]; if (k && k.time == null) k.progress = (s[7] | 0) + (+s[6] || 0); }
+  for (const s of states) { const k = race.karts[s[0]]; if (k.time == null) k.progress = (s[7] | 0) + s[6]; }
+  const message = { t: 's', id: p.id, raceId: race.id, seq: m.seq, k: states };
   for (const id of room.players) {
     const o = players.get(id);
-    if (id !== p.id && o && o.udp) udp.send(buf, o.udp.port, o.udp.address);
+    if (id === p.id || !o) continue;
+    if (o.protocol === 'tcp') send(o, message); else sendDatagram(o, message);
   }
-});
+}
 udp.bind(UDP_PORT, '0.0.0.0', () => log(`UDP listening on ${UDP_PORT}`));
 
 require('./gateway')({ webPort: WEB_PORT, tcpPort: TCP_PORT, udpPort: UDP_PORT, log });
 
-// heartbeat check: a player that stops sending UDP (cable pulled, PC frozen) is dropped even if TCP never closed
+// Either transport can keep a connection alive; UDP loss must not break a TCP experiment.
 setInterval(() => {
   const now = Date.now();
   for (const p of players.values()) {
-    if (now - p.lastSeen > HEARTBEAT_TIMEOUT) { send(p, { t: 'error', msg: 'Timed out (no UDP heartbeat)' }); drop(p, 'heartbeat timeout'); }
+    if (now - p.lastSeen > HEARTBEAT_TIMEOUT) { send(p, { t: 'error', msg: 'Timed out (no network heartbeat)' }); drop(p, 'heartbeat timeout'); }
   }
 }, 1000);

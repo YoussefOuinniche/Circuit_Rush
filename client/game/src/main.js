@@ -201,7 +201,7 @@ function buildWorld({ mode, characterIndex = 0, difficulty = 'normal', laps = RA
     const isPlayer = grid ? grid[i].owner === net.id : mode === 'race' && i === 0;
     const model = makeKartModel(character);
     const kart = new Kart({ scene: w.scene, track: w.track, character, isPlayer, index: i, model });
-    kart.local = !grid || isPlayer || (grid[i].owner == null && net.isHost); // false = position comes over UDP
+    kart.local = !grid || isPlayer || (grid[i].owner == null && net.isHost); // false = position comes from the network
     w.karts.push(kart);
     if (isPlayer) w.player = kart;
   }
@@ -242,6 +242,7 @@ function addAI(w, k, difficulty) {
 }
 
 function disposeWorld() {
+  net.stats.stop();
   const w = world;
   world = null;
   renderPass.scene = fallbackScene;
@@ -377,10 +378,12 @@ bus.on('race:go', () => {
   if (state === 'countdown' || (state === 'paused' && prevState === 'countdown')) {
     if (state === 'paused') prevState = 'racing'; else setState('racing');
     audio.playMusic('race');
+    if (world?.mp) net.stats.start();
   }
 });
 bus.on('race:finish', (d) => {
   if (!world || !d || !d.kart || !d.kart.isPlayer) return;
+  if (world.mp) net.stats.stop();
   setState('finished');
   // hand the player's kart to an AI so it keeps cruising during the finish camera
   const AIClass = mods.ai && mods.ai.AIDriver;
@@ -405,13 +408,22 @@ bus.on('race:end', (d) => {
 // ---------------------------------------------------------------------------------------------
 // Keyboard (global)
 // ---------------------------------------------------------------------------------------------
+function switchProtocol() {
+  if (!world?.mp || !net.stats.active || resultsShown) return;
+  net.setProtocol(net.protocol === 'udp' ? 'tcp' : 'udp');
+  hud.toast(`POSITION UPDATES: ${net.protocol.toUpperCase()}`);
+}
+function toggleLoss() {
+  if (!world?.mp || !net.stats.active || resultsShown) return;
+  net.loss = !net.loss;
+  hud.toast(net.loss ? 'UDP LOSS DEMO: 20% ON' : 'UDP LOSS DEMO: OFF');
+}
+hud.onProtocolSwitch = switchProtocol;
+hud.onLossToggle = toggleLoss;
 window.addEventListener('keydown', (e) => {
   if (e.target && e.target.tagName === 'INPUT') return; // typing a name / IP
-  if (e.code === 'KeyL' && !e.repeat && net.available) {
-    net.loss = !net.loss;
-    hud.toast(net.loss ? 'UDP PACKET LOSS 20% ON' : 'UDP PACKET LOSS OFF');
-    return;
-  }
+  if (e.code === 'KeyT' && !e.repeat) { switchProtocol(); return; }
+  if (e.code === 'KeyL' && !e.repeat) { toggleLoss(); return; }
   if (e.code === 'KeyM' && !e.repeat) {
     const muted = audio.toggleMute();
     hud.toast(muted ? 'SOUND OFF' : 'SOUND ON');
@@ -519,7 +531,7 @@ function simulate(w, dt) {
     const k = w.karts[i];
     try { if (k.local === false) driveRemote(k, dt); else k.update(dt); } catch (e) { report('kart.update', e); }
   }
-  if (w.mp && (w.sendT -= dt) <= 0) { w.sendT = 1 / 30; sendKartStates(w.karts); } // UDP ~30 Hz
+  if (w.mp && (w.sendT -= dt) <= 0) { w.sendT = 1 / 30; sendKartStates(w.karts); } // selected transport, ~30 Hz
   if (mods.kart && mods.kart.resolveKartCollisions) safe('resolveKartCollisions', () => mods.kart.resolveKartCollisions(w.karts));
   if (w.items) safe('items.update', () => w.items.update(dt, time));
   safe('race.update', () => w.race.update(dt));
@@ -562,7 +574,9 @@ function frame() {
     safe('audio.update', () => audio.update(dt, { camera }));
   }
 
-  hud.setPing(w && w.mp ? `PING ${net.ping} ms${net.loss ? ' · LOSS 20%' : ''}` : '');
+  hud.setPing('');
+  hud.setNetwork({ visible: !!w?.mp && !resultsShown, protocol: net.protocol, ping: net.ping,
+    loss: net.loss, web: !!window.net?.web, active: net.stats.active && state !== 'paused' });
   try { composer.render(dt); } catch (e) { report('render', e); }
 }
 
@@ -614,9 +628,13 @@ net.on('room', (m) => {
     addAI(w, k, w.difficulty);
   });
 });
-net.on('race_start', (m) => { if (net.room) startRace({ grid: m.grid, laps: m.laps, difficulty: m.difficulty }); });
+net.on('race_start', (m) => {
+  if (!net.room) return;
+  net.prepareRace(m.raceId);
+  startRace({ grid: m.grid, laps: m.laps, difficulty: m.difficulty });
+});
 net.on('go', () => beginCountdown());
-net.on('s', (m) => { // UDP kart states from another player
+net.on('s', (m) => { // kart states from another player
   const w = mpWorld();
   if (w) for (const s of m.k) { const k = w.byIdx[s[0]]; if (k && !k.local) applyKartState(k, s); }
 });
@@ -640,6 +658,7 @@ net.on('left', (m) => {
 net.on('race_end', (m) => {
   const w = mpWorld();
   if (!w) return;
+  net.stats.stop();
   resultsShown = true;
   if (state === 'paused') resume();
   const rows = m.results.map((r, i) => {
@@ -651,6 +670,7 @@ net.on('race_end', (m) => {
   });
   audio.playMusic('menu');
   hud.showResults(rows, {
+    networkStats: net.stats.snapshot(), web: !!window.net?.web,
     laps: w.race.laps, againLabel: 'BACK TO ROOM', menuLabel: 'LEAVE ROOM',
     onRestart: () => backToMenus(),
     onMenu: () => { net.send({ t: 'leave' }); net.room = null; backToMenus(); },

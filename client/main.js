@@ -23,14 +23,14 @@ ipcMain.on('connect', (_, ip) => {
     let i;
     while ((i = buf.indexOf('\n')) >= 0) {
       const line = buf.slice(0, i); buf = buf.slice(i + 1);
-      try { toGame(JSON.parse(line)); } catch { /* ignore malformed */ }
+      try { toGame({ ...JSON.parse(line), _transport: 'tcp' }); } catch { /* ignore malformed */ }
     }
   });
   tcp.on('error', (e) => toGame({ t: 'error', msg: e.message }));
   tcp.on('close', () => toGame({ t: 'disconnected' }));
   // UDP: connectionless datagrams for kart positions and ping.
   udp = dgram.createSocket('udp4');
-  udp.on('message', (m) => { try { toGame(JSON.parse(m)); } catch { /* ignore */ } });
+  udp.on('message', (m) => { try { toGame({ ...JSON.parse(m), _transport: 'udp' }); } catch { /* ignore */ } });
   udp.on('error', () => {});
 });
 ipcMain.on('tcp', (_, msg) => { if (tcp && !tcp.destroyed) tcp.write(JSON.stringify(msg) + '\n'); });

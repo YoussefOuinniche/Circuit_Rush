@@ -1,5 +1,9 @@
 {
   "name": "circuit-rush",
   "private": true,
-  "scripts": { "start": "node start.js" }
+  "scripts": {
+    "start": "node start.js",
+    "server": "node server/server.js",
+    "test": "node --test server/network-stats.test.mjs && node server/selftest.js"
+  }
 }

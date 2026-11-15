@@ -1,7 +1,9 @@
 // Client-side networking glue. window.net comes from the Electron preload (real TCP/UDP sockets in the main process).
-// Without Electron (plain browser) `net.available` is false and the game runs single-player as before.
+// Browsers use the WebSocket gateway; without either bridge the game runs offline.
+import { NetworkStats } from './network-stats.mjs';
 const handlers = {};
-const lastSeq = new Map(); // sender id -> last UDP sequence number seen (older/duplicate packets are dropped)
+const encoder = new TextEncoder();
+const lastSeq = new Map(); // sender id -> newest sequence across both transports
 
 export const net = {
   available: !!window.net,
@@ -9,14 +11,37 @@ export const net = {
   name: null,
   room: null,       // last 'room' message
   ping: 0,
-  loss: false,      // demo switch: drop 20% of our outgoing UDP packets
+  loss: false,      // demo switch: skip 20% of outgoing UDP position updates
   seq: 0,
   _use: 0,
+  protocol: 'udp',
+  raceId: null,
+  stats: new NetworkStats(),
+
+  prepareRace(raceId) {
+    this.raceId = raceId; this.seq = 0; this.loss = false; lastSeq.clear();
+    this.stats.reset(); this.setProtocol('udp');
+  },
+  setProtocol(protocol) {
+    if (!['tcp', 'udp'].includes(protocol)) return;
+    this.stats.switch(protocol); this.protocol = protocol; this.ping = null;
+    this.send({ t: 'transport', protocol });
+    // Register the UDP endpoint immediately when switching back from TCP.
+    if (protocol === 'udp') window.net.sendUdp({ t: 'ping', id: this.id, ts: performance.now() });
+  },
+  state(msg) {
+    const packet = { ...msg, id: this.id, raceId: this.raceId, measure: this.stats.active };
+    const dropped = this.protocol === 'udp' && this.loss && Math.random() < 0.2;
+    const bytes = encoder.encode(JSON.stringify(packet)).length + (this.protocol === 'tcp' ? 1 : 0);
+    this.stats.sent(msg.seq, bytes, dropped);
+    if (!dropped) {
+      if (this.protocol === 'tcp') this.send(packet); else window.net.sendUdp(packet);
+    }
+  },
 
   connect(ip) { window.net.connect(ip); },
   send(msg) { window.net.send(msg); },
   udp(msg) {
-    if (this.loss && Math.random() < 0.2) return;
     window.net.sendUdp({ ...msg, id: this.id });
   },
   on(type, fn) { handlers[type] = fn; },
@@ -26,22 +51,36 @@ export const net = {
 
 if (net.available) {
   window.net.on((m) => {
-    if (m.t === 'pong') { net.ping = Math.round(performance.now() - m.ts); return; }
+    if (m.t === 'pong') {
+      if (m.protocol === net.protocol) net.ping = Math.round(performance.now() - m.ts);
+      return;
+    }
+    if (m.t === 'state_ack') {
+      if (m.raceId === net.raceId) net.stats.acknowledge(m.seq, m.protocol);
+      return;
+    }
     if (m.t === 's') {
-      if (m.seq <= (lastSeq.get(m.id) ?? -1)) return; // UDP may reorder: keep only the newest
+      if (m.raceId !== net.raceId) return;
+      const stale = m.seq <= (lastSeq.get(m.id) ?? -1);
+      net.stats.receive(m._transport, stale);
+      if (stale) return; // also protects against old UDP packets arriving after a switch
       lastSeq.set(m.id, m.seq);
     }
     if (m.t === 'room') net.room = m;
     if (m.t === 'login_ok') { net.id = m.id; net.name = m.name; lastSeq.clear(); }
     try { handlers[m.t] && handlers[m.t](m); } catch (e) { console.error('[net]', m.t, e); }
   });
-  // UDP heartbeat + latency probe, once a second, as long as we are logged in
-  setInterval(() => { if (net.id) net.udp({ t: 'ping', ts: performance.now() }); }, 1000);
+  // Reliable liveness is independent of UDP loss or UDP being blocked.
+  setInterval(() => {
+    if (!net.id) return;
+    net.send({ t: 'ping', ts: performance.now() });
+    if (net.protocol === 'udp') net.udp({ t: 'ping', ts: performance.now() });
+  }, 1000);
 }
 
 const r2 = (v) => Math.round(v * 100) / 100;
 
-/** UDP state for the karts this client controls: [index, x, y, z, heading, speed, trackT, lap, flags]. */
+/** Position state: [index, x, y, z, heading, speed, trackT, lap, flags]. */
 export function sendKartStates(karts) {
   const k = [];
   for (const kart of karts) {
@@ -49,7 +88,7 @@ export function sendKartStates(karts) {
     const flags = (kart.drifting ? 1 : 0) | (kart.driftDir > 0 ? 2 : 0) | (kart.boostTimer > 0 ? 4 : 0) | (kart.airborne ? 8 : 0);
     k.push([kart.index, r2(kart.position.x), r2(kart.position.y), r2(kart.position.z), r2(kart.heading), r2(kart.speed), Math.round(kart.trackT * 1e4) / 1e4, kart._lapCount | 0, flags]);
   }
-  if (k.length) net.udp({ t: 's', seq: net.seq++, k });
+  if (k.length) net.state({ t: 's', seq: net.seq++, k });
 }
 
 /** Store a received state on the kart; driveRemote() moves the kart toward it every frame. */

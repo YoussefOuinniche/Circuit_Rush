@@ -13,7 +13,9 @@ start.js                `npm start`: install + server + public link
 client/game/net-shim.js browser stand-in for the Electron preload (WebSocket to the gateway)
 client/main.js          Electron main process: owns the TCP + UDP sockets
 client/preload.js       exposes window.net to the game page
-client/game/src/net.js  client networking: UDP kart states, remote kart smoothing
+client/game/src/net.js  client networking: TCP/UDP selection, kart states, remote kart smoothing
+client/game/src/network-stats.mjs  per-race application measurements
+client/game/src/network-report.mjs end-of-race comparison table
 client/game/src/*.js    the game (main.js = flow + server messages, menu.js = login/lobby/room screens)
 ```
 
@@ -52,9 +54,44 @@ To find the server PC's IP address: `ipconfig` on Windows (IPv4 Address), or `ip
 
 Test the server without the game: `cd server && node selftest.js`.
 
+## TCP / UDP comparison experiment
+
+For direct TCP and UDP measurements, run the **Electron client**:
+
+```powershell
+# Terminal 1, project root
+npm run server
+
+# Terminal 2, project root
+cd client
+npm ci
+npm start
+```
+
+Connect to `127.0.0.1` on the host PC, or the server PC's IP on another PC. Create a room and start a race; one human plus bots is enough to collect round-trip measurements.
+
+At GO, the **LIVE NETWORK LAB** panel becomes active. Click **SWITCH TO TCP / UDP**, or press **T**, to change both your outgoing position updates and the transport used to deliver other players' positions to you. Other players can choose independently. Login, items, laps, results, and switch commands continue to use reliable TCP.
+
+Spend similar amounts of time on each protocol. The end-of-race results include a **TCP vs UDP** table with time selected, updates attempted/sent, server acknowledgements, unacknowledged updates, simulated drops, average/maximum round-trip time, jitter, message rate, outgoing payload size/rate, and received/stale peer updates. A protocol you did not try is marked **Not sampled**. Counters reset for every race and measure from GO until your own finish, or until the server ends the race if you do not finish. Late replies received before the results are displayed count toward their original protocol.
+
+The **UDP loss demo** button (or **L**) randomly skips approximately 20% of outgoing UDP position updates. These simulated drops are shown separately; TCP and heartbeats are unaffected. This demonstrates missing UDP updates, not TCP's response to equivalent physical packet loss. A healthy local connection may show very similar TCP and UDP timings.
+
+Measurement definitions:
+
+- RTT is client update send to application acknowledgement receipt over the same protocol. It includes application scheduling and, in Electron, IPC. It is not one-way latency.
+- Jitter is the mean absolute difference between consecutive RTT samples for that protocol.
+- Unacknowledged updates may have been lost, delayed, rejected, or had their replies lost. They are **not an IP packet-loss measurement**. TCP retransmissions are handled by the operating system and are not counted.
+- Counts refer to application messages, not TCP segments or IP packets. Payload includes outgoing position JSON (and TCP's newline delimiter), excluding protocol headers, ACK replies, heartbeats, and retransmissions. The host sends bot positions too.
+- Peer receive counts can be zero when racing alone. Server ACKs still work without another player. Old sequence numbers are ignored across switches; a race identifier excludes packets from previous races.
+- In a browser, the browser-to-gateway leg always uses WebSocket/TCP. Only the gateway-to-game-server leg switches TCP/UDP, usually on the server's local machine. The table labels this limitation. Use Electron on separate PCs to compare the actual client-to-server network path.
+
+The results initially show a short summary: share of race time, share of sent updates, percentage of sent updates confirmed by a server reply, and average response time. **See details** expands the full measurements and definitions; click **Hide details** to collapse them. Simulated drops are excluded from the confirmation percentage because those updates were never sent.
+
+Run `npm test` from the project root for measurement tests and the real TCP/UDP multiplayer smoke test.
+
 ## Controls
 Arrow keys or WASD: drive · Space: drift · E / Shift: use item · C: look back · Esc: menu (leave race) · M: mute ·
-**L: toggle 20% UDP packet loss** (demo: remote karts stay smooth).
+**T: switch position updates between TCP and UDP** · **L: toggle the 20% UDP loss demo** while racing.
 
 ## Protocol: what goes over TCP and what over UDP
 
@@ -64,8 +101,9 @@ Arrow keys or WASD: drive · Space: drift · E / Shift: use item · C: look back
 | `race_start` (grid), `loaded`, `go` (countdown start) | TCP | everyone must start the same race at the same moment |
 | lap and finish reports, results and points | TCP | a lost message would make the standings wrong |
 | item box claim, item use, item hit claim | TCP | one lost or duplicated message changes the race |
-| kart position, heading, speed (30 times per second) | UDP | stale after about 30 ms; the newest packet replaces the old one, so resending is useless |
-| ping / heartbeat (1 per second) | UDP | measures real latency and detects dead clients |
+| kart position, heading, speed (about 30 times per second) | TCP or UDP, selected in-game | compare ordered delivery with latest-update datagrams |
+| position acknowledgements | Same transport as the incoming update | measures application round-trip time, including solo races |
+| ping / heartbeat (1 per second) | TCP plus UDP when UDP is selected | measures latency and keeps TCP mode alive if UDP is blocked |
 
 TCP messages are JSON lines (`{"t":"login","name":"Ana"}\n`). UDP datagrams are JSON objects with a sequence number. Receivers drop packets older than the last one they saw, because UDP can reorder packets.
 The other karts are **dead-reckoned and smoothed**: each client moves a remote kart forward along its last known direction and speed, then eases it toward each new packet. A lost packet therefore shows no visible jump.
@@ -82,7 +120,7 @@ The other karts are **dead-reckoned and smoothed**: each client moves a remote k
 
 ### Simultaneous players and disconnections
 - Every player has its own TCP socket. A message handler error is caught, so one bad client cannot crash the server, and malformed JSON is ignored.
-- A disconnect is detected in two ways: the TCP socket closes (window closed or app crashed), or **no UDP packet arrives for 3 s** (cable pulled or PC frozen).
+- A disconnect is detected when the TCP socket closes (window closed or app crashed), or **neither TCP nor UDP traffic arrives for 3 s** (cable pulled or PC frozen).
 - When a player disconnects, the server tells the room (`left`), the player's kart is removed, the race continues, and the player is ranked by distance covered.
 - If the host leaves, the next player becomes host and takes over driving the bots. A room with no players is deleted.
 

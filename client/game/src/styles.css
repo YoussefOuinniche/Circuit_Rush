@@ -514,6 +514,63 @@ button { font: inherit; color: inherit; }
 .btn.disabled { opacity: 0.5; pointer-events: none; }
 .hud-ping { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); font-weight: 900; font-size: 13px; padding: 3px 10px; border-radius: 10px; background: rgba(0,0,0,0.45); }
 .hud-ping:empty { display: none; }
+
+/* Network experiment: a compact dashboard between the minimap and speedometer. */
+.network-controls {
+  position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%); width: 290px;
+  padding: 12px 16px; border: 2px solid #57e5c1; border-radius: 16px;
+  background: rgba(9, 21, 37, .94); box-shadow: 0 6px 0 rgba(0,0,0,.4);
+  pointer-events: auto; font-family: var(--body); color: #fff;
+}
+.network-controls[data-protocol="tcp"] { border-color: #ffd23f; }
+.network-eyebrow { font: 900 10px var(--body); letter-spacing: 2px; color: #a9c6db; }
+.network-controls-row { display: flex; align-items: center; justify-content: space-between; margin: 3px 0 8px; }
+.network-controls-row strong { font: 28px var(--display); color: #57e5c1; }
+[data-protocol="tcp"] .network-controls-row strong { color: var(--gold); }
+.network-controls-row span { font-size: 12px; font-variant-numeric: tabular-nums; }
+.network-controls button { width: 100%; cursor: pointer; font: 900 12px var(--body); border-radius: 8px; min-height: 36px; }
+.network-switch { border: 0; background: #fff; color: #101d30; }
+.network-switch:hover { background: #d6fff3; }
+.network-controls button:focus-visible { outline: 3px solid var(--gold); outline-offset: 3px; }
+.network-controls button:disabled { opacity: .5; cursor: default; }
+.network-controls kbd { margin-left: 8px; font: inherit; opacity: .65; }
+.network-loss { margin-top: 6px; border: 1px solid #71899e; color: #fff; background: transparent; }
+.network-loss[aria-pressed="true"] { color: #ffda80; border-color: #ffda80; }
+.network-controls small { display: block; margin-top: 7px; text-align: center; font-size: 10px; color: #a9c6db; }
+.res-panel { overflow-y: auto; overscroll-behavior: contain; }
+.res-panel > * { flex-shrink: 0; }
+.res-table { overflow: visible; }
+.network-report { margin-top: 12px; padding: 18px; border: 1px solid #6d91ac; border-radius: 16px; background: #0c1c2e; }
+.network-report h2 { margin: 3px 0 8px; font: 32px var(--display); color: #fff; }
+.network-path { padding-left: 10px; border-left: 3px solid #57e5c1; font-size: 12px; line-height: 1.5; color: #d2e6f3; }
+.network-table { border-collapse: collapse; width: 100%; font-size: 12px; font-variant-numeric: tabular-nums; }
+.network-table caption { text-align: left; padding: 8px 0; color: #b6cddd; font-size: 11px; }
+.network-table th, .network-table td { padding: 9px 8px; border-bottom: 1px solid #294054; text-align: right; }
+.network-table th:first-child { text-align: left; width: 46%; font-weight: 700; }
+.network-table thead th { font: 20px var(--display); }
+.network-table thead th:nth-child(2) { color: #ffd23f; }
+.network-table thead th:nth-child(3) { color: #57e5c1; }
+.network-table small { display: block; font: 10px var(--body); color: #b6cddd; }
+.network-table tbody tr:nth-child(odd) { background: rgba(255,255,255,.035); }
+.network-theory td { font-size: 11px; max-width: 160px; }
+.network-notes { font-size: 11px; line-height: 1.55; color: #b6cddd; margin: 12px 0 0; }
+.network-summary td { font-size: 20px; font-weight: 900; }
+.network-summary th small { margin-top: 3px; font-size: 11px; }
+.network-takeaway { margin: 14px 0 0; font-size: 13px; line-height: 1.55; color: #e0f3ff; }
+.network-demo-note { color: #ffda80; }
+.network-details { margin-top: 16px; border-top: 1px solid #294054; }
+.network-details summary { cursor: pointer; padding: 14px 8px; font: 900 13px var(--body); color: #bff9e9; border-radius: 6px; }
+.network-details summary:hover { background: #183247; }
+.network-details summary:focus-visible { outline: 3px solid var(--gold); outline-offset: 2px; }
+.network-details-open, .network-details[open] .network-details-closed { display: none; }
+.network-details[open] .network-details-open { display: inline; }
+@media (max-width: 700px) {
+  .network-controls { bottom: 160px; width: 235px; padding: 8px 12px; }
+  .network-report { padding: 10px; }
+  .network-table th, .network-table td { padding: 8px 4px; font-size: 11px; }
+  .network-summary td { font-size: 17px; }
+  .res-panel { padding: 16px 10px; }
+}
 .in-room .pv-stats, .in-room .pv-kart { display: none; }
 .in-room .preview { padding: 10px; gap: 4px; }
 .in-room .pv-portrait { width: 84px; height: 84px; }

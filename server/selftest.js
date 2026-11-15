@@ -29,6 +29,7 @@ function client() {
   dup.send({ t: 'login', name: 'alice' }); await wait(100);
   assert.equal(dup.last('error').msg, 'Name already taken');
   a.id = a.last('login_ok').id; b.id = b.last('login_ok').id;
+  const heartbeat = setInterval(() => { a.send({ t: 'ping', ts: 1 }); b.send({ t: 'ping', ts: 1 }); }, 500);
   a.sendUdp({ t: 'ping', ts: 1 }); b.sendUdp({ t: 'ping', ts: 1 }); await wait(100);
   assert.ok(a.udpMsgs.some((m) => m.t === 'pong'), 'pong over UDP');
 
@@ -42,13 +43,34 @@ function client() {
   assert.equal(b.count('race_start'), 0);
   a.send({ t: 'start', laps: 1 }); await wait(100);
   const grid = a.last('race_start').grid;
+  const raceId = a.last('race_start').raceId;
   assert.equal(grid.length, 8);
   a.send({ t: 'loaded' }); b.send({ t: 'loaded' }); await wait(100);
   assert.equal(b.count('go'), 1);
 
   const ka = grid.findIndex((g) => g.owner === a.id), kb = grid.findIndex((g) => g.owner === b.id);
-  a.sendUdp({ t: 's', seq: 1, k: [[ka, 1, 2, 3, 0, 10, 0.5, 1, 0]] }); await wait(100);
+  const state = (seq, kart = ka) => ({ t: 's', raceId, measure: true, seq, k: [[kart, 1, 2, 3, 0, 10, 0.5, 1, 0]] });
+  a.sendUdp(state(1)); await wait(100);
   assert.ok(b.udpMsgs.some((m) => m.t === 's' && m.k[0][0] === ka), 'state relayed over UDP');
+  assert.ok(a.udpMsgs.some((m) => m.t === 'state_ack' && m.seq === 1 && m.protocol === 'udp'), 'UDP update acknowledged over UDP');
+
+  b.send({ t: 'transport', protocol: 'tcp' });
+  a.send({ t: 'transport', protocol: 'tcp' }); await wait(100);
+  a.send(state(2)); await wait(100);
+  assert.equal(b.last('s').seq, 2, 'TCP update relayed over TCP');
+  assert.equal(a.last('state_ack').protocol, 'tcp', 'TCP ACK');
+  a.sendUdp(state(3)); await wait(100);
+  assert.equal(b.last('s').seq, 3, 'UDP sender can reach TCP receiver');
+  b.send({ t: 'transport', protocol: 'udp' }); await wait(100);
+  a.send(state(4)); await wait(100);
+  assert.ok(b.udpMsgs.some((m) => m.t === 's' && m.seq === 4), 'TCP sender can reach UDP receiver');
+  const received = () => b.msgs.concat(b.udpMsgs).filter((m) => m.t === 's').length;
+  const beforeInvalid = received();
+  a.sendUdp(state(2)); // old UDP packet after a TCP update
+  a.send({ ...state(5), raceId: -1 }); // previous/invalid race
+  a.send(state(6, kb)); // another player's kart
+  await wait(100);
+  assert.equal(received(), beforeInvalid, 'stale, wrong-race and unauthorized updates not relayed');
 
   a.send({ t: 'box', box: 3, kart: ka }); b.send({ t: 'box', box: 3, kart: kb }); await wait(100);
   assert.equal(a.count('box'), 1, 'only one box claim wins');
@@ -61,12 +83,23 @@ function client() {
   a.send({ t: 'finish', kart: ka }); await wait(100);
   assert.equal(a.count('finish'), 0, 'finish within 10 s of GO is rejected');
 
+  // TCP heartbeats alone keep the experiment alive even with no UDP traffic.
+  await wait(14000);
+  assert.equal(a.count('error'), 0, 'TCP-only traffic prevents UDP timeout');
+  a.send({ t: 'finish', kart: ka }); b.send({ t: 'finish', kart: kb });
+  await wait(4300);
+  assert.equal(a.count('race_end'), 1, 'mixed-transport race completes');
+  assert.equal(a.last('race_end').results.length, 8);
+  a.send({ t: 'start', laps: 1 }); await wait(100);
+  assert.notEqual(a.last('race_start').raceId, raceId, 'next race has an isolated measurement ID');
+
   b.sock.destroy(); await wait(200);
   assert.ok(a.last('left'), 'disconnect broadcast');
   assert.equal(a.last('room').players.length, 1);
 
-  await wait(3500); // a stops sending UDP -> heartbeat timeout
-  assert.equal(a.last('error').msg, 'Timed out (no UDP heartbeat)');
+  clearInterval(heartbeat);
+  await wait(4200); // no traffic on either transport -> heartbeat timeout
+  assert.equal(a.last('error').msg, 'Timed out (no network heartbeat)');
   console.log('selftest OK');
   srv.kill(); process.exit(0);
 })().catch((e) => { console.error('selftest FAILED', e); srv.kill(); process.exit(1); });

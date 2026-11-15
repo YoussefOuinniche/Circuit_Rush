@@ -2,6 +2,7 @@
 import { bus } from './events.js';
 import { ITEMS, CHARACTERS } from './config.js';
 import { formatTime } from './race.js';
+import { networkReport } from './network-report.mjs';
 
 const hex = (c) => '#' + (c >>> 0).toString(16).padStart(6, '0').slice(-6);
 export const ordinal = (n) => {
@@ -242,6 +243,16 @@ export class HUD {
 
     this.toastEl = el('div', 'toast', uiRoot);
     this.pingEl = el('div', 'hud-ping', r);
+    this.networkEl = el('div', 'network-controls hidden', r, `
+      <div class="network-eyebrow">LIVE NETWORK LAB</div>
+      <div class="network-controls-row"><strong data-network-mode>UDP</strong><span data-network-rtt>Waiting for reply</span></div>
+      <button type="button" class="network-switch">SWITCH TO TCP <kbd>T</kbd></button>
+      <button type="button" class="network-loss" aria-pressed="false">UDP loss demo: OFF <kbd>L</kbd></button>
+      <small data-network-path></small>`);
+    this.networkSwitch = this.networkEl.querySelector('.network-switch');
+    this.networkLoss = this.networkEl.querySelector('.network-loss');
+    this.networkSwitch.addEventListener('click', () => { this.onProtocolSwitch?.(); this.networkSwitch.blur(); });
+    this.networkLoss.addEventListener('click', () => { this.onLossToggle?.(); this.networkLoss.blur(); });
 
     this._subscribe();
   }
@@ -305,6 +316,25 @@ export class HUD {
   }
 
   setPing(text) { if (this.pingEl.textContent !== text) this.pingEl.textContent = text; }
+
+  setNetwork({ visible, protocol, ping, loss, web, active }) {
+    const key = `${visible}|${protocol}|${ping}|${loss}|${web}|${active}`;
+    if (key === this._networkKey) return;
+    this._networkKey = key;
+    this.networkEl.classList.toggle('hidden', !visible);
+    if (!visible) return;
+    this.networkEl.dataset.protocol = protocol;
+    this.networkEl.querySelector('[data-network-mode]').textContent = protocol.toUpperCase();
+    this.networkEl.querySelector('[data-network-rtt]').textContent = ping == null ? 'Waiting for reply' : `RTT ${ping} ms`;
+    const label = `SWITCH TO ${protocol === 'udp' ? 'TCP' : 'UDP'} <kbd>T</kbd>`;
+    if (this.networkSwitch.innerHTML !== label) this.networkSwitch.innerHTML = label;
+    this.networkSwitch.disabled = !active;
+    this.networkLoss.disabled = !active;
+    this.networkLoss.setAttribute('aria-pressed', String(loss));
+    const lossLabel = `UDP loss demo: ${loss ? '20% ON' : 'OFF'} <kbd>L</kbd>`;
+    if (this.networkLoss.innerHTML !== lossLabel) this.networkLoss.innerHTML = lossLabel;
+    this.networkEl.querySelector('[data-network-path]').textContent = web ? 'Browser bridge \u00b7 UDP on server leg only' : 'Direct TCP / UDP sockets';
+  }
 
   toast(msg) {
     this.toastEl.textContent = msg;
@@ -544,7 +574,7 @@ export class HUD {
   }
 
   // ------------------------------------------------------------------ results
-  showResults(results, { onRestart, onMenu, laps, againLabel = 'RACE AGAIN', menuLabel = 'MAIN MENU' } = {}) {
+  showResults(results, { onRestart, onMenu, laps, networkStats, web = false, againLabel = 'RACE AGAIN', menuLabel = 'MAIN MENU' } = {}) {
     const R = this.resultsEl;
     const rows = results.map((r, i) => {
       const img = this.portrait(r.character);
@@ -565,12 +595,15 @@ export class HUD {
         <div class="res-title">${title}</div>
         <div class="res-sub">${laps || ''} LAP RACE · FINAL STANDINGS</div>
         <div class="res-table">${rows}</div>
+        ${networkReport(networkStats, web)}
         <div class="res-buttons">
           <button class="btn primary" data-act="restart">${againLabel}</button>
           <button class="btn" data-act="menu">${menuLabel}</button>
         </div>
       </div>`;
     R.classList.remove('hidden');
+    // Let the disclosure handle Enter/Space without activating a results-menu action.
+    R.querySelector('.network-details summary')?.addEventListener('keydown', (e) => e.stopPropagation());
     requestAnimationFrame(() => R.classList.add('show'));
     const btns = [...R.querySelectorAll('.btn')];
     let sel = 0;

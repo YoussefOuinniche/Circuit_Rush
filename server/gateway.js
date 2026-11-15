@@ -13,7 +13,7 @@ const crypto = require('crypto');
 module.exports = function startGateway({ webPort, tcpPort, udpPort, log }) {
   const CLIENT = path.join(__dirname, '..', 'client');
   const ALLOWED = [path.join(CLIENT, 'game'), path.join(CLIENT, 'node_modules', 'three')]; // nothing else is served
-  const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png' };
+  const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png' };
 
   const server = http.createServer((req, res) => {
     const url = decodeURIComponent(req.url.split('?')[0]);
@@ -54,9 +54,12 @@ module.exports = function startGateway({ webPort, tcpPort, udpPort, log }) {
     const close = () => { ws.destroy(); tcp.destroy(); try { udp.close(); } catch { /* already closed */ } };
     let lines = '';
     tcp.on('connect', () => wsSend(ws, '{"t":"connected"}'));
-    tcp.on('data', (d) => { lines += d; let i; while ((i = lines.indexOf('\n')) >= 0) { wsSend(ws, lines.slice(0, i)); lines = lines.slice(i + 1); } });
+    const forward = (data, protocol) => {
+      try { wsSend(ws, JSON.stringify({ ...JSON.parse(data), _transport: protocol })); } catch { /* malformed */ }
+    };
+    tcp.on('data', (d) => { lines += d; let i; while ((i = lines.indexOf('\n')) >= 0) { forward(lines.slice(0, i), 'tcp'); lines = lines.slice(i + 1); } });
     tcp.on('error', close); tcp.on('close', close);
-    udp.on('message', (m) => wsSend(ws, m.toString()));
+    udp.on('message', (m) => forward(m.toString(), 'udp'));
     udp.on('error', () => {});
 
     let buf = Buffer.alloc(0);
