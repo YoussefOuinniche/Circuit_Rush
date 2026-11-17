@@ -3,6 +3,7 @@
   "private": true,
   "scripts": {
     "start": "node start.js",
+    "local": "node start.js --local",
     "server": "node server/server.js",
     "test": "node --test server/network-stats.test.mjs && node server/selftest.js"
   }

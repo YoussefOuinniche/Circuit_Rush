@@ -5,8 +5,14 @@ const net = require('net');
 const dgram = require('dgram');
 const assert = require('assert');
 
-const srv = spawn(process.execPath, [__dirname + '/server.js'], { env: { ...process.env, TCP_PORT: 5100, UDP_PORT: 5101, WEB_PORT: 5102 } });
+const srv = spawn(process.execPath, [__dirname + '/server.js'], { env: { ...process.env, TCP_PORT: 5100, UDP_PORT: 5101, WEB_PORT: 5102, ADMIN_PORT: 5103 } });
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+async function admin(route = '/state', method = 'GET', data = {}) {
+  const response = await fetch(`http://127.0.0.1:5103/api${route}`, {
+    method, ...(method === 'GET' ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }),
+  });
+  return { status: response.status, data: await response.json() };
+}
 
 function client() {
   const c = { msgs: [], udpMsgs: [], sock: net.connect(5100, '127.0.0.1'), udp: dgram.createSocket('udp4') };
@@ -22,6 +28,10 @@ function client() {
 
 (async () => {
   await wait(400);
+  assert.equal((await admin()).data.connectedPlayers, 0, 'server controls do not register a player');
+  assert.equal((await fetch('http://127.0.0.1:5103/')).status, 200, 'server dashboard loads');
+  assert.equal((await fetch('http://127.0.0.1:5102/api/state')).status, 404, 'operator API is not on the public player server');
+  assert.equal((await fetch('http://127.0.0.1:5103/api/state', { headers: { Origin: 'https://untrusted.example' } })).status, 403, 'cross-origin operator access blocked');
   const a = client(), b = client(), dup = client();
   await wait(100);
   a.send({ t: 'login', name: 'Alice' }); await wait(50);
@@ -33,18 +43,33 @@ function client() {
   a.sendUdp({ t: 'ping', ts: 1 }); b.sendUdp({ t: 'ping', ts: 1 }); await wait(100);
   assert.ok(a.udpMsgs.some((m) => m.t === 'pong'), 'pong over UDP');
 
-  a.send({ t: 'create', name: 'Room <1>' }); await wait(100);
-  const roomId = a.last('room').id;
-  assert.equal(a.last('room').name, 'Room 1', 'name sanitized');
+  a.send({ t: 'create', name: 'Not allowed' }); await wait(100);
+  assert.equal(a.last('error').msg, 'Only the server can create rooms');
+  assert.equal((await admin()).data.rooms.length, 0, 'clients cannot create rooms');
+  const created = await admin('/rooms', 'POST', { name: 'Room <1>', laps: 1, difficulty: 'easy' });
+  assert.equal(created.status, 201);
+  const roomId = created.data.id;
+  await wait(100);
+  assert.equal(a.last('rooms').rooms[0].name, 'Room 1', 'server room name sanitized');
+  assert.equal(b.last('rooms').rooms[0].count, 0, 'empty server room pushed to connected clients');
+  assert.equal((await admin()).data.connectedPlayers, 2, 'operator does not take a player slot');
+  assert.equal((await admin(`/rooms/${roomId}/start`, 'POST')).status, 409, 'cannot start without players');
+  a.send({ t: 'join', room: roomId }); await wait(100);
   b.send({ t: 'join', room: roomId }); await wait(100);
   assert.equal(a.last('room').players.length, 2);
 
-  b.send({ t: 'start' }); await wait(100); // not host: ignored
+  a.send({ t: 'start' }); b.send({ t: 'start' }); await wait(100);
   assert.equal(b.count('race_start'), 0);
-  a.send({ t: 'start', laps: 1 }); await wait(100);
+  assert.equal(a.last('error').msg, 'Waiting for the server to start the race', 'even the bot-driving client cannot start');
+  const errorsBeforeRace = a.count('error');
+  assert.equal((await admin(`/rooms/${roomId}/start`, 'POST')).status, 200);
+  await wait(100);
   const grid = a.last('race_start').grid;
   const raceId = a.last('race_start').raceId;
   assert.equal(grid.length, 8);
+  assert.deepEqual(grid.filter((g) => g.owner != null).map((g) => g.owner).sort(), [a.id, b.id].sort(), 'only connected racers have human karts');
+  assert.equal(a.last('race_start').difficulty, 'easy', 'server settings reach players');
+  assert.equal((await admin(`/rooms/${roomId}`, 'DELETE')).status, 409, 'cannot close an active race');
   a.send({ t: 'loaded' }); b.send({ t: 'loaded' }); await wait(100);
   assert.equal(b.count('go'), 1);
 
@@ -85,12 +110,12 @@ function client() {
 
   // TCP heartbeats alone keep the experiment alive even with no UDP traffic.
   await wait(14000);
-  assert.equal(a.count('error'), 0, 'TCP-only traffic prevents UDP timeout');
+  assert.equal(a.count('error'), errorsBeforeRace, 'TCP-only traffic prevents UDP timeout');
   a.send({ t: 'finish', kart: ka }); b.send({ t: 'finish', kart: kb });
   await wait(4300);
   assert.equal(a.count('race_end'), 1, 'mixed-transport race completes');
   assert.equal(a.last('race_end').results.length, 8);
-  a.send({ t: 'start', laps: 1 }); await wait(100);
+  assert.equal((await admin(`/rooms/${roomId}/start`, 'POST')).status, 200); await wait(100);
   assert.notEqual(a.last('race_start').raceId, raceId, 'next race has an isolated measurement ID');
 
   b.sock.destroy(); await wait(200);
@@ -100,6 +125,17 @@ function client() {
   clearInterval(heartbeat);
   await wait(4200); // no traffic on either transport -> heartbeat timeout
   assert.equal(a.last('error').msg, 'Timed out (no network heartbeat)');
+  const emptyRoom = (await admin()).data.rooms[0];
+  assert.equal(emptyRoom.count, 0, 'server room remains after everyone leaves');
+  assert.equal(emptyRoom.state, 'lobby', 'empty room resets for future racers');
+  const late = client();
+  await wait(50); late.send({ t: 'login', name: 'LatePlayer' }); await wait(100);
+  assert.equal(late.last('rooms').rooms[0].id, roomId, 'new clients discover existing server rooms');
+  late.send({ t: 'join', room: roomId }); await wait(100);
+  assert.equal(late.last('room').players.length, 1);
+  assert.equal((await admin(`/rooms/${roomId}`, 'DELETE')).status, 200); await wait(100);
+  assert.equal(late.last('room_closed').name, 'Room 1', 'operator closure returns clients to lobby');
+  assert.equal(late.last('rooms').rooms.length, 0, 'room removal is pushed to clients');
   console.log('selftest OK');
   srv.kill(); process.exit(0);
 })().catch((e) => { console.error('selftest FAILED', e); srv.kill(); process.exit(1); });

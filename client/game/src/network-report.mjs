@@ -1,7 +1,7 @@
 const number = (n, unit = '') => n == null ? '\u2014' : `${n.toFixed(1)}${unit}`;
 const percent = (part, total) => total > 0 ? number(100 * part / total, '%') : '\u2014';
 
-export function networkReport(stats, web) {
+export function networkReport(stats) {
   if (!stats) return '';
   const cell = (b, fn) => b.seconds > 0 ? fn(b) : '\u2014';
   const row = (label, fn) => `<tr><th scope="row">${label}</th>${['tcp', 'udp'].map((p) => `<td>${cell(stats[p], fn)}</td>`).join('')}</tr>`;
@@ -20,9 +20,7 @@ export function networkReport(stats, web) {
   return `<section class="network-report" aria-labelledby="network-report-title">
     <div class="network-report-heading"><span class="network-eyebrow">YOUR RACE / NETWORK LAB</span>
       <h2 id="network-report-title">TCP vs UDP</h2></div>
-    <p class="network-path">${web
-      ? 'Browser bridge: WebSocket/TCP to the gateway; TCP/UDP comparison only on the gateway-to-server connection.'
-      : 'Direct sockets: TCP and UDP between your desktop game and the server.'}</p>
+    <p class="network-path">Browser bridge: WebSocket/TCP to the gateway; TCP/UDP comparison only on the gateway-to-server connection.</p>
     <table class="network-table network-summary"><caption>Your race at a glance</caption>
       ${headings}<tbody>
         ${row('Share of race time', (b) => percent(b.seconds, totalSeconds))}

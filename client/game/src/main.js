@@ -136,7 +136,6 @@ const hud = new HUD(uiRoot);
 const menu = new Menu(uiRoot, {
   onStart: (settings) => {
     if (!net.available) return startRace(settings);
-    if (net.isHost) net.send({ t: 'start', difficulty: settings.difficulty, laps: settings.laps });
   },
   onResume: () => resume(),
   onRestart: () => { if (world && world.mp) return resume(); menu.hideAll(); startRace(lastSettings); },
@@ -144,8 +143,7 @@ const menu = new Menu(uiRoot, {
   onScreen: (s) => { setState(s === 'select' ? 'select' : 'title'); },
   // multiplayer menus
   onTitle: net.available ? () => showNetMenu() : undefined,
-  onLogin: (ip, name) => { pendingName = name; net.connect(ip || '127.0.0.1'); },
-  onCreate: (name) => net.send({ t: 'create', name }),
+  onLogin: (name) => { pendingName = name; net.connect(); },
   onJoin: (room) => net.send({ t: 'join', room }),
   onLeave: () => { net.send({ t: 'leave' }); net.room = null; showNetMenu(); },
   onChar: (char) => { if (net.room) net.send({ t: 'char', char }); },
@@ -576,7 +574,7 @@ function frame() {
 
   hud.setPing('');
   hud.setNetwork({ visible: !!w?.mp && !resultsShown, protocol: net.protocol, ping: net.ping,
-    loss: net.loss, web: !!window.net?.web, active: net.stats.active && state !== 'paused' });
+    loss: net.loss, active: net.stats.active && state !== 'paused' });
   try { composer.render(dt); } catch (e) { report('render', e); }
 }
 
@@ -611,6 +609,11 @@ net.on('disconnected', () => {
   else if (menu.screen === 'login') menu.loginStatus.textContent = 'CANNOT REACH SERVER';
 });
 net.on('rooms', (m) => menu.setRooms(m.rooms));
+net.on('room_closed', (m) => {
+  net.room = null;
+  const message = `The server closed ${m.name}`;
+  if (mpWorld()) backToMenus(message); else showNetMenu(message);
+});
 net.on('room', (m) => {
   if (!m.players.some((p) => p.id === net.id)) return;
   const w = mpWorld();
@@ -670,7 +673,7 @@ net.on('race_end', (m) => {
   });
   audio.playMusic('menu');
   hud.showResults(rows, {
-    networkStats: net.stats.snapshot(), web: !!window.net?.web,
+    networkStats: net.stats.snapshot(),
     laps: w.race.laps, againLabel: 'BACK TO ROOM', menuLabel: 'LEAVE ROOM',
     onRestart: () => backToMenus(),
     onMenu: () => { net.send({ t: 'leave' }); net.room = null; backToMenus(); },

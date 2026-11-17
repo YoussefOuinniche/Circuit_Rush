@@ -45,11 +45,11 @@ test('repeated switches, missing replies, stale incoming updates and reset', () 
 
 test('report shows unused protocols and browser limitations without inventing values', () => {
   const stats = new NetworkStats(() => 0).snapshot();
-  const report = networkReport(stats, true);
+  const report = networkReport(stats);
   assert.match(report, /Not sampled/); assert.match(report, /WebSocket\/TCP/);
   assert.match(report, /not a measurement of IP packet loss/);
   assert.doesNotMatch(report, /NaN|Infinity/);
-  assert.match(networkReport(stats, false), /Direct sockets/);
+  assert.match(report, /only on the gateway-to-server connection/);
 });
 
 test('summary separates usage shares, confirmed sends and simulated drops', () => {
@@ -64,7 +64,7 @@ test('summary separates usage shares, confirmed sends and simulated drops', () =
   clock = 20012;
   for (let i = 5; i < 8; i++) stats.acknowledge(i, 'tcp');
   clock = 100000; stats.stop();
-  const summary = networkReport(stats.snapshot(), false).split('<details')[0];
+  const summary = networkReport(stats.snapshot()).split('<details')[0];
   assert.match(summary, /Share of race time<\/th><td>80\.0%<\/td><td>20\.0%/);
   assert.match(summary, /Share of sent updates<\/th><td>60\.0%<\/td><td>40\.0%/);
   assert.match(summary, /Server reply received<\/small><\/th><td>50\.0%<\/td><td>100\.0%/);

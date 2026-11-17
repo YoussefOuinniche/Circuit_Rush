@@ -317,8 +317,8 @@ export class HUD {
 
   setPing(text) { if (this.pingEl.textContent !== text) this.pingEl.textContent = text; }
 
-  setNetwork({ visible, protocol, ping, loss, web, active }) {
-    const key = `${visible}|${protocol}|${ping}|${loss}|${web}|${active}`;
+  setNetwork({ visible, protocol, ping, loss, active }) {
+    const key = `${visible}|${protocol}|${ping}|${loss}|${active}`;
     if (key === this._networkKey) return;
     this._networkKey = key;
     this.networkEl.classList.toggle('hidden', !visible);
@@ -333,7 +333,7 @@ export class HUD {
     this.networkLoss.setAttribute('aria-pressed', String(loss));
     const lossLabel = `UDP loss demo: ${loss ? '20% ON' : 'OFF'} <kbd>L</kbd>`;
     if (this.networkLoss.innerHTML !== lossLabel) this.networkLoss.innerHTML = lossLabel;
-    this.networkEl.querySelector('[data-network-path]').textContent = web ? 'Browser bridge \u00b7 UDP on server leg only' : 'Direct TCP / UDP sockets';
+    this.networkEl.querySelector('[data-network-path]').textContent = 'Browser bridge \u00b7 UDP on server leg only';
   }
 
   toast(msg) {
@@ -574,7 +574,7 @@ export class HUD {
   }
 
   // ------------------------------------------------------------------ results
-  showResults(results, { onRestart, onMenu, laps, networkStats, web = false, againLabel = 'RACE AGAIN', menuLabel = 'MAIN MENU' } = {}) {
+  showResults(results, { onRestart, onMenu, laps, networkStats, againLabel = 'RACE AGAIN', menuLabel = 'MAIN MENU' } = {}) {
     const R = this.resultsEl;
     const rows = results.map((r, i) => {
       const img = this.portrait(r.character);
@@ -595,7 +595,7 @@ export class HUD {
         <div class="res-title">${title}</div>
         <div class="res-sub">${laps || ''} LAP RACE · FINAL STANDINGS</div>
         <div class="res-table">${rows}</div>
-        ${networkReport(networkStats, web)}
+        ${networkReport(networkStats)}
         <div class="res-buttons">
           <button class="btn primary" data-act="restart">${againLabel}</button>
           <button class="btn" data-act="menu">${menuLabel}</button>

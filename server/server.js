@@ -5,10 +5,12 @@
 // who got an item box, which item hit counts, and the points.
 const net = require('net');
 const dgram = require('dgram');
+const os = require('os');
 
 const TCP_PORT = +process.env.TCP_PORT || 5000;
 const UDP_PORT = +process.env.UDP_PORT || TCP_PORT; // same number => one TCP+UDP tunnel/firewall rule
-const WEB_PORT = +process.env.WEB_PORT || 8080;      // browser link (bonus)
+const WEB_PORT = +process.env.WEB_PORT || 8080;      // players' browser link
+const ADMIN_PORT = +process.env.ADMIN_PORT || WEB_PORT + 1; // local server operator only
 const MAX_PLAYERS = 3;          // humans per room; the 8-kart grid is filled with bots
 const KARTS = 8;
 const CHARS = 8;
@@ -17,9 +19,10 @@ const MIN_LAP_MS = 10000;       // anti-cheat: a lap faster than this is rejecte
 const POINTS = [10, 8, 6, 5, 4, 3, 2, 1];
 
 const players = new Map(); // id -> { id, name, sock, udp, room, char, lastSeen }
-const rooms = new Map();   // id -> { id, name, laps, host, players: [id], state, race, scores }
+const rooms = new Map();   // host is the client simulating bots, not the server operator
 let nextId = 1;
 let nextRaceId = 1;
+let publicUrl = null;
 
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 const clean = (v, n) => String(v || '').replace(/[^\w .\-']/g, '').trim().slice(0, n); // names are shown in the UI
@@ -27,12 +30,12 @@ const send = (p, msg) => { if (p && !p.sock.destroyed) p.sock.write(JSON.stringi
 const toRoom = (room, msg, except) => room.players.forEach((id) => id !== except && send(players.get(id), msg));
 
 function roomList() {
-  return [...rooms.values()].map((r) => ({ id: r.id, name: r.name, laps: r.laps, count: r.players.length, max: MAX_PLAYERS, state: r.state }));
+  return [...rooms.values()].map((r) => ({ id: r.id, name: r.name, laps: r.laps, difficulty: r.difficulty, count: r.players.length, max: MAX_PLAYERS, state: r.state }));
 }
 function pushRooms() { const list = roomList(); for (const p of players.values()) send(p, { t: 'rooms', rooms: list }); }
 function pushRoom(room) {
   toRoom(room, {
-    t: 'room', id: room.id, name: room.name, laps: room.laps, host: room.host, state: room.state,
+    t: 'room', id: room.id, name: room.name, laps: room.laps, difficulty: room.difficulty, host: room.host, state: room.state,
     players: room.players.map((id) => { const p = players.get(id); return { id, name: p.name, char: p.char, points: room.scores[p.name] || 0 }; }),
   });
 }
@@ -82,16 +85,11 @@ function handle(p, m) {
   const room = rooms.get(p.room);
 
   switch (m.t) {
-    case 'create': {
-      if (room) leave(p);
-      const r = { id: nextId++, name: clean(m.name, 24) || `${p.name}'s room`, laps: 3, host: p.id, players: [], state: 'lobby', race: null, scores: {} };
-      rooms.set(r.id, r);
-      log(`room #${r.id} "${r.name}" created by ${p.name}`);
-      return join(p, r);
-    }
+    case 'create': return send(p, { t: 'error', msg: 'Only the server can create rooms' });
     case 'join': {
       const r = rooms.get(m.room);
       if (!r) return send(p, { t: 'error', msg: 'Room not found' });
+      if (room === r) return pushRoom(r);
       if (r.players.length >= MAX_PLAYERS) return send(p, { t: 'error', msg: 'Room is full' });
       if (r.state !== 'lobby') return send(p, { t: 'error', msg: 'Race in progress' });
       if (room) leave(p);
@@ -104,7 +102,7 @@ function handle(p, m) {
       if (room) pushRoom(room);
       return;
     }
-    case 'start': if (room && room.host === p.id && room.state === 'lobby') startRace(room, m); return;
+    case 'start': return send(p, { t: 'error', msg: 'Waiting for the server to start the race' });
   }
   if (!room || !room.race) return;
   const race = room.race;
@@ -155,6 +153,7 @@ function join(p, room) {
   if (taken.has(p.char)) p.char = [...Array(CHARS).keys()].find((c) => !taken.has(c));
   p.room = room.id;
   room.players.push(p.id);
+  if (room.host == null) room.host = p.id; // first racing client drives the bots
   log(`${p.name} joined room #${room.id}`);
   pushRoom(room); pushRooms();
 }
@@ -165,7 +164,11 @@ function leave(p) {
   if (!room) return;
   room.players = room.players.filter((id) => id !== p.id);
   log(`${p.name} left room #${room.id}`);
-  if (!room.players.length) { rooms.delete(room.id); return pushRooms(); }
+  if (!room.players.length) {
+    clearTimeout(room.race?.timer); clearTimeout(room.race?.loadTimer);
+    room.race = null; room.state = 'lobby'; room.host = null;
+    return pushRooms(); // server-created rooms stay available for the next clients
+  }
   if (room.host === p.id) room.host = room.players[0]; // host migration: new host also takes over the bots
   if (room.race) {
     const karts = room.race.grid.map((g, i) => (g.owner === p.id ? i : -1)).filter((i) => i >= 0);
@@ -205,13 +208,16 @@ function startRace(room, m) {
     karts: grid.map(() => ({ lap: 1, lapAt: 0, time: null, progress: 0 })),
   };
   log(`race start in room #${room.id} (${humans.map((h) => h.name).join(', ')})`);
-  toRoom(room, { t: 'race_start', raceId: room.race.id, grid, laps: room.laps, difficulty: ['easy', 'normal', 'hard'].includes(m.difficulty) ? m.difficulty : 'normal' });
-  setTimeout(() => { if (room.state === 'loading') go(room); }, 10000); // don't wait forever for a slow PC
+  toRoom(room, { t: 'race_start', raceId: room.race.id, grid, laps: room.laps, difficulty: room.difficulty });
+  const race = room.race;
+  race.loadTimer = setTimeout(() => { if (room.race === race && room.state === 'loading') go(room); }, 10000);
+  pushRoom(room);
   pushRooms();
 }
 
 function go(room) {
   if (room.state !== 'loading') return;
+  clearTimeout(room.race.loadTimer);
   room.state = 'racing';
   room.race.goAt = Date.now() + 3500; // clients run the 3-2-1 countdown (3.5 s) and race time starts at GO
   room.race.karts.forEach((k) => { k.lapAt = room.race.goAt; });
@@ -301,6 +307,48 @@ function handleState(p, m, protocol) {
 udp.bind(UDP_PORT, '0.0.0.0', () => log(`UDP listening on ${UDP_PORT}`));
 
 require('./gateway')({ webPort: WEB_PORT, tcpPort: TCP_PORT, udpPort: UDP_PORT, log });
+
+// The server operator manages rooms without opening a player socket or owning a kart.
+const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
+require('./admin')({
+  port: ADMIN_PORT, log,
+  snapshot: () => ({
+    connectedPlayers: players.size,
+    playerLinks: publicUrl ? [publicUrl] : Object.values(os.networkInterfaces()).flat()
+      .filter((a) => a && a.family === 'IPv4' && !a.internal).map((a) => `http://${a.address}:${WEB_PORT}/game/`),
+    public: !!publicUrl,
+    rooms: roomList().map((r) => ({ ...r, players: rooms.get(r.id).players.map((id) => ({ id, name: players.get(id).name })) })),
+  }),
+  create: (m) => {
+    const name = clean(m.name, 24);
+    if (!name) fail(400, 'Enter a room name');
+    if (![1, 3, 5].includes(m.laps) || !['easy', 'normal', 'hard'].includes(m.difficulty)) fail(400, 'Choose a valid lap count and class');
+    const room = { id: nextId++, name, laps: m.laps, difficulty: m.difficulty, host: null, players: [], state: 'lobby', race: null, scores: {} };
+    rooms.set(room.id, room); pushRooms();
+    log(`server created room #${room.id} "${room.name}"`);
+    return { id: room.id };
+  },
+  start: (id) => {
+    const room = rooms.get(id);
+    if (!room) fail(404, 'Room not found');
+    if (room.state !== 'lobby') fail(409, 'This race has already started');
+    if (!room.players.length) fail(409, 'Wait for at least one player to join');
+    startRace(room, room);
+    return { id };
+  },
+  remove: (id) => {
+    const room = rooms.get(id);
+    if (!room) fail(404, 'Room not found');
+    if (room.state !== 'lobby') fail(409, 'Wait for the race to finish before closing this room');
+    for (const id of room.players) {
+      const p = players.get(id); p.room = null;
+      send(p, { t: 'room_closed', name: room.name });
+    }
+    rooms.delete(id); pushRooms();
+    return { id };
+  },
+});
+module.exports = { setPublicUrl: (url) => { publicUrl = url; } };
 
 // Either transport can keep a connection alive; UDP loss must not break a TCP experiment.
 setInterval(() => {

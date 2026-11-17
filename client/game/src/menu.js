@@ -191,18 +191,16 @@ export class Menu {
     s.innerHTML = `
       <div class="pause-panel net-panel">
         <div class="pause-title">MULTIPLAYER</div>
-        <label>SERVER IP</label><input class="in-ip" spellcheck="false">
-        <label>YOUR NAME</label><input class="in-name" maxlength="14" spellcheck="false">
+        <label for="player-name">YOUR NAME</label><input id="player-name" class="in-name" maxlength="14" spellcheck="false">
         <button class="btn primary">CONNECT</button>
         <div class="net-status"></div>
       </div>`;
-    const ip = s.querySelector('.in-ip'), name = s.querySelector('.in-name');
-    if (window.net && window.net.web) { ip.style.display = ip.previousElementSibling.style.display = 'none'; } // browser: server = the page's host
-    try { ip.value = localStorage.getItem('cr-ip') || '127.0.0.1'; name.value = localStorage.getItem('cr-name') || ''; } catch (e) { ip.value = '127.0.0.1'; }
+    const name = s.querySelector('.in-name');
+    try { name.value = localStorage.getItem('cr-name') || ''; } catch (e) { /* storage unavailable */ }
     const go = () => {
-      try { localStorage.setItem('cr-ip', ip.value.trim()); localStorage.setItem('cr-name', name.value.trim()); } catch (e) { /* ignore */ }
+      try { localStorage.setItem('cr-name', name.value.trim()); } catch (e) { /* ignore */ }
       this.loginStatus.textContent = 'CONNECTING…';
-      this.h.onLogin && this.h.onLogin(ip.value.trim(), name.value.trim());
+      this.h.onLogin && this.h.onLogin(name.value.trim());
     };
     s.querySelector('.btn').addEventListener('click', go);
     s.addEventListener('keydown', (e) => { if (e.code === 'Enter' || e.code === 'NumpadEnter') go(); });
@@ -213,16 +211,11 @@ export class Menu {
     const s = this.lobbyEl = el('div', 'screen pause-screen', this.uiRoot);
     s.innerHTML = `
       <div class="pause-panel net-panel">
-        <div class="pause-title">LOBBY</div>
-        <div class="room-list"></div>
-        <input class="in-room" maxlength="24" placeholder="New room name" spellcheck="false">
-        <button class="btn primary">CREATE ROOM</button>
-        <div class="net-status"></div>
+        <div class="pause-title">AVAILABLE ROOMS</div>
+        <p class="lobby-hint">Choose a room created by the server. This list updates automatically.</p>
+        <div class="room-list" aria-label="Available rooms" aria-live="polite"></div>
+        <div class="net-status" role="status"></div>
       </div>`;
-    const input = s.querySelector('.in-room');
-    const create = () => this.h.onCreate && this.h.onCreate(input.value.trim());
-    s.querySelector('.btn').addEventListener('click', create);
-    input.addEventListener('keydown', (e) => { if (e.code === 'Enter' || e.code === 'NumpadEnter') create(); });
     this.roomListEl = s.querySelector('.room-list');
     this.lobbyStatus = s.querySelector('.net-status');
   }
@@ -236,12 +229,14 @@ export class Menu {
 
   setRooms(rooms) {
     const L = this.roomListEl;
-    L.innerHTML = rooms.length ? '' : '<div class="room-empty">No rooms yet: create one!</div>';
+    L.innerHTML = rooms.length ? '' : '<div class="room-empty">Waiting for the server to open a room…</div>';
     for (const r of rooms) {
       const row = el('div', 'room-row', L, `<span class="rn"></span><span>${r.count}/${r.max}</span>`);
       row.querySelector('.rn').textContent = r.name;
       const open = r.count < r.max && r.state === 'lobby';
-      const b = el('button', 'btn' + (open ? '' : ' disabled'), row, r.state === 'lobby' ? 'JOIN' : 'RACING');
+      const b = el('button', 'btn' + (open ? '' : ' disabled'), row, r.state !== 'lobby' ? 'RACING' : open ? 'JOIN' : 'FULL');
+      b.disabled = !open;
+      b.setAttribute('aria-label', `${b.textContent}: ${r.name}`);
       b.addEventListener('click', () => this.h.onJoin && this.h.onJoin(r.id));
     }
   }
@@ -252,10 +247,14 @@ export class Menu {
     if (!room) this._sentChar = null;
     this.roomEl.style.display = room ? '' : 'none';
     this.selectEl.classList.toggle('in-room', !!room); // compact preview to make room for the player list
-    const btn = this.optEls[2], host = room && room.host === myId;
-    btn.textContent = !room ? 'RACE!' : host ? 'START RACE' : 'WAITING FOR HOST';
-    btn.classList.toggle('disabled', !!room && !host);
+    const btn = this.optEls[2];
+    btn.textContent = !room ? 'RACE!' : 'WAITING FOR SERVER';
+    btn.disabled = !!room;
+    btn.classList.toggle('disabled', !!room);
     if (!room) return;
+    this.lapsIndex = Math.max(0, LAPS.indexOf(room.laps));
+    this.diffIndex = Math.max(0, DIFFS.indexOf(room.difficulty));
+    this._refreshOpts();
     const me = room.players.find((p) => p.id === myId);
     // adopt the server's racer on joining, or when it refused ours (taken). Hover alone never changes it.
     if (me && me.char !== this._sentChar) { this._sentChar = me.char; this._setChar(me.char, true); }
@@ -264,7 +263,7 @@ export class Menu {
     for (const p of room.players) {
       const row = el('div', 'rp', this.roomEl, '<span class="chip"></span><span class="nm"></span><span class="pts"></span>');
       row.querySelector('.chip').style.background = hex(CHARACTERS[p.char].color);
-      row.querySelector('.nm').textContent = p.name + (p.id === room.host ? ' ★' : '') + (p.id === myId ? ' (you)' : '');
+      row.querySelector('.nm').textContent = p.name + (p.id === myId ? ' (you)' : '');
       row.querySelector('.pts').textContent = p.points + ' PTS';
     }
   }
@@ -341,6 +340,7 @@ export class Menu {
     this.optEls.forEach((o, j) => o.classList.toggle('focus', this.zone === 'opts' && j === this.optIndex));
   }
   _changeOpt(d) {
+    if (this.mp) return; // the server operator chooses race settings
     if (this.optIndex === 0) this.diffIndex = (this.diffIndex + d + DIFFS.length) % DIFFS.length;
     else if (this.optIndex === 1) this.lapsIndex = (this.lapsIndex + d + LAPS.length) % LAPS.length;
     else return;
@@ -350,7 +350,7 @@ export class Menu {
     v.classList.remove('bump'); void v.offsetWidth; v.classList.add('bump');
   }
   _start() {
-    if (this.screen !== 'select') return;
+    if (this.screen !== 'select' || this.mp) return;
     try { localStorage.setItem('tkr-settings', JSON.stringify({ charIndex: this.charIndex, diffIndex: this.diffIndex, lapsIndex: this.lapsIndex })); } catch (e) { /* ignore */ }
     bus.emit('ui:confirm');
     this.h.onStart && this.h.onStart(this.settings);

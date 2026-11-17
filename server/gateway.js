@@ -1,4 +1,4 @@
-// Web gateway (bonus): lets players join from a browser link, from any network.
+// Web gateway: serves the browser game and lets players join through a shared link.
 // - HTTP: serves the game files (client/game + three.js) so the link opens the game.
 // - WebSocket /ws: a browser cannot open raw TCP/UDP sockets, so for each browser player this gateway
 //   opens a REAL TCP connection and a REAL UDP socket to the game server and relays messages both ways.

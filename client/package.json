@@ -2,8 +2,9 @@
   "name": "circuit-rush-client",
   "version": "1.0.0",
   "private": true,
-  "main": "main.js",
-  "scripts": { "start": "electron ." },
-  "dependencies": { "three": "0.170.0" },
-  "devDependencies": { "electron": "31.7.7" }
+  "scripts": {
+    "start": "node ../start.js",
+    "local": "node ../start.js --local"
+  },
+  "dependencies": { "three": "0.170.0" }
 }

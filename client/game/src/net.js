@@ -1,5 +1,5 @@
-// Client-side networking glue. window.net comes from the Electron preload (real TCP/UDP sockets in the main process).
-// Browsers use the WebSocket gateway; without either bridge the game runs offline.
+// Client networking through window.net, supplied by net-shim.js over WebSocket.
+// TCP/UDP selection controls the gateway-to-game-server connection.
 import { NetworkStats } from './network-stats.mjs';
 const handlers = {};
 const encoder = new TextEncoder();
@@ -39,7 +39,7 @@ export const net = {
     }
   },
 
-  connect(ip) { window.net.connect(ip); },
+  connect() { window.net.connect(); },
   send(msg) { window.net.send(msg); },
   udp(msg) {
     window.net.sendUdp({ ...msg, id: this.id });

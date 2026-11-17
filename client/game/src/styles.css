@@ -506,6 +506,10 @@ button { font: inherit; color: inherit; }
 .room-row .rn { flex: 1; font-size: 18px; }
 .room-row .btn { width: auto !important; font-size: 18px; padding: 6px 16px; }
 .room-empty { opacity: 0.7; font-weight: 800; padding: 10px; }
+.lobby-hint { max-width: 420px; margin: 0; text-align: center; line-height: 1.5; color: #d6e3ef; }
+.in-room .opt-arrow { visibility: hidden; pointer-events: none; }
+.in-room .opt-val { cursor: default; }
+.in-room .race-btn { font-size: clamp(18px, 2.4vw, 26px); }
 .room-players { padding: 12px 14px; border-radius: 16px; background: var(--panel); border: 3px solid rgba(255,255,255,0.18); font-weight: 900; }
 .room-players .rp-title { font-family: var(--display); font-size: 20px; color: var(--gold); margin-bottom: 6px; }
 .room-players .rp { display: flex; gap: 8px; align-items: center; padding: 3px 0; }

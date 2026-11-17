@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Circuit Rush · Race control</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/admin.css">
+  <script src="/admin.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Circuit Rush server controls"><span class="checkers" aria-hidden="true"></span>CIRCUIT RUSH<span class="brand-role">SERVER</span></a>
+    <span class="connection" id="connection" role="status">Connecting…</span>
+  </header>
+  <main>
+    <section class="intro" aria-labelledby="title">
+      <div><p class="eyebrow">THE SERVER DESK</p><h1 id="title">Race control<span>.</span></h1><p class="lead">You manage the grid. Connected players race.</p></div>
+      <dl class="totals"><div><dt>OPEN ROOMS</dt><dd id="room-total">—</dd></div><div><dt>CONNECTED PLAYERS</dt><dd id="player-total">—</dd></div></dl>
+    </section>
+    <section class="share" aria-labelledby="share-title">
+      <div><h2 id="share-title">Invite your players</h2><p id="share-help">Waiting for a player link…</p></div>
+      <div class="share-controls"><label class="sr-only" for="player-link">Player link</label><select id="player-link" disabled><option>No link yet</option></select><button class="button secondary" id="copy-link" type="button" disabled>Copy link</button></div>
+    </section>
+    <div id="feedback" class="feedback" role="status" aria-live="polite"></div>
+    <div class="workspace">
+      <section class="create-panel" aria-labelledby="create-title">
+        <p class="eyebrow">01 / SET UP</p><h2 id="create-title">Open a room</h2>
+        <p class="section-note">It appears immediately in every player's lobby.</p>
+        <form id="create-room">
+          <label for="room-name">Room name</label>
+          <input id="room-name" name="name" maxlength="24" placeholder="Friday night circuit" required autocomplete="off">
+          <div class="form-row"><div><label for="laps">Laps</label><select id="laps" name="laps"><option value="1">1 lap</option><option value="3" selected>3 laps</option><option value="5">5 laps</option></select></div><div><label for="difficulty">Bot class</label><select id="difficulty" name="difficulty"><option value="easy">50cc · Easy</option><option value="normal" selected>100cc · Normal</option><option value="hard">150cc · Hard</option></select></div></div>
+          <button class="button primary" type="submit" id="create-button">Create room <span aria-hidden="true">↗</span></button>
+        </form>
+        <div class="operator-note"><span class="line-icon" aria-hidden="true">—</span><p>The server takes <strong>no player slot</strong>. Each room holds up to 3 players; bots fill the remaining grid.</p></div>
+      </section>
+      <section class="rooms-panel" aria-labelledby="rooms-title">
+        <div class="section-heading"><div><p class="eyebrow">02 / RUN THE RACE</p><h2 id="rooms-title">Your rooms</h2></div><span class="live-label">UPDATES LIVE</span></div>
+        <div id="rooms"><div class="empty-state"><div class="grid-marks" aria-hidden="true"><i>01</i><i>02</i><i>03</i></div><h3>The grid is quiet.</h3><p>Create a room, share the player link, and wait for racers to join.</p></div></div>
+      </section>
+    </div>
+  </main>
+  <footer><span>CIRCUIT RUSH / SERVER CONTROLS</span><span>Keep the server running while players race.</span></footer>
+</body>
+</html>
