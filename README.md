@@ -15,9 +15,9 @@ npm start
 
 The launcher installs missing game dependencies, starts the game server and HTTP gateway, and uses `cloudflared` to create a public link such as `https://random-words.trycloudflare.com`. On Windows it attempts to install `cloudflared` with WinGet if needed; on other systems install `cloudflared` separately to use public sharing.
 
-**Server operator:** open `http://localhost:8081`. This is the room-management dashboard, with no game canvas or player slot. Create a room with a name, difficulty, and lap count. Wait for clients to join, then click **Start race**. Rooms remain open when everyone leaves, and can be closed from the dashboard while no race is running.
+**Server operator:** open `http://localhost:8081`. This is the room-management dashboard, with no game canvas or player slot. Create a room with a name, difficulty, and lap count. Wait for clients to join, then click **Start race**. Rooms created here remain open when everyone leaves. Any room can be closed from the dashboard while no race is running, and the dashboard can also start rooms that players created.
 
-**Players:** share the printed HTTPS link (also available to copy in the dashboard). Players open it, press Enter, enter a name, and see **AVAILABLE ROOMS**. New rooms appear automatically, including rooms created while a client is already in the lobby. Players join a room, choose a racer, and wait for the server to start. They cannot create rooms or start races. A race can start with one player plus bots; the server operator never joins the grid.
+**Players:** share the printed HTTPS link (also available to copy in the dashboard). Players open it, press Enter, enter a name, and see **AVAILABLE ROOMS**. New rooms appear automatically, including rooms created while a client is already in the lobby. Players can join a room or **create their own** (name, then CREATE ROOM). The creator (★) chooses the class and laps and clicks **START RACE**; if the creator leaves, the next player takes over. A player-created room disappears when it becomes empty. In rooms made from the dashboard, players wait for the server to start. A race can start with one player plus bots; the server operator never joins the grid.
 
 Keep the host computer awake and the terminal running while people play. Stop with **Ctrl+C**. The public link changes when the tunnel restarts; it is not permanent hosting. Internet access is needed for initial dependency installation and public sharing.
 
@@ -105,7 +105,7 @@ All browser traffic reaches the gateway over WebSocket. Between the gateway and 
 
 | Interaction | Protocol |
 |---|---|
-| Login, room lists, joining, character selection | TCP |
+| Login, room lists, creating and joining rooms, character selection | TCP |
 | `race_start`, `loaded`, `go` | TCP |
 | Laps, finishes, results, points | TCP |
 | Item box claims, uses, hits | TCP |
@@ -115,14 +115,14 @@ All browser traffic reaches the gateway over WebSocket. Between the gateway and 
 
 TCP messages are newline-delimited JSON. UDP datagrams contain JSON with a sequence number. Both use the same ownership and race checks.
 
-- **Rooms:** at most 3 humans; join only in the lobby; only the server operator creates rooms and starts races. These actions use the local admin HTTP API, and client protocol attempts are rejected.
+- **Rooms:** at most 3 humans; join only in the lobby. Players create rooms from the lobby (TCP `create`), and only the room's creator may start it (TCP `start`). The server operator can also create, start and close rooms through the local admin HTTP API.
 - **Start:** clients send `loaded`; the server sends `go` after everyone loads or a 10-second timeout, triggering each client's countdown.
 - **Laps:** reports must be in order and meet a 10-second minimum lap time.
 - **Finish:** accepted reports are ordered by server receipt; unfinished karts are ranked by reported progress.
 - **Items:** first box claim wins; duplicate projectile-hit claims are ignored.
 - **Points:** 10/8/6/5/4/3/2/1 by place, accumulated within the room across races. Disconnected players receive no points.
 - **Ownership:** clients report their own kart; the assigned bot-driving client may also report bots. Movement and collisions are simulated by clients.
-- **Disconnects:** socket closure or roughly 3 seconds without either transport removes the player. The race continues. Another client takes over bots if needed. Empty rooms return to the lobby and remain available until the operator closes them.
+- **Disconnects:** socket closure or roughly 3 seconds without either transport removes the player. The race continues. Another client takes over bots if needed. An empty player room is deleted; an empty dashboard room returns to the lobby and stays until the operator closes it.
 
 ## Checks
 
@@ -130,4 +130,4 @@ TCP messages are newline-delimited JSON. UDP datagrams contain JSON with a seque
 npm test
 ```
 
-Runs measurement/report tests and a smoke test with real TCP/UDP sockets, admin-only creation/start, live room discovery, and room lifecycle checks. Test servers use ports 5100–5103. To check browser play manually, open the player link in two windows and log in with different names. Create a room in the separate server dashboard, verify it appears in both lobbies, join it, and start the race from the dashboard.
+Runs measurement/report tests and a smoke test with real TCP/UDP sockets, dashboard and player room creation, creator-only start, live room discovery, and room lifecycle checks. Test servers use ports 5100–5103. To check browser play manually, open the player link in two windows and log in with different names. Create a room in the separate server dashboard (or from a lobby), verify it appears in both lobbies, join it, and start the race from the dashboard (or as the room creator).
