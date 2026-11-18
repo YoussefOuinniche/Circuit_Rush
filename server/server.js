@@ -19,23 +19,25 @@ const MIN_LAP_MS = 10000;       // anti-cheat: a lap faster than this is rejecte
 const POINTS = [10, 8, 6, 5, 4, 3, 2, 1];
 
 const players = new Map(); // id -> { id, name, sock, udp, room, char, lastSeen }
-const rooms = new Map();   // host is the client simulating bots, not the server operator
+const rooms = new Map();   // creator = player who made the room (null: server operator); host = client simulating bots
 let nextId = 1;
 let nextRaceId = 1;
 let publicUrl = null;
 
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
+const LAP_CHOICES = [1, 3, 5];
+const CLASSES = ['easy', 'normal', 'hard'];
 const clean = (v, n) => String(v || '').replace(/[^\w .\-']/g, '').trim().slice(0, n); // names are shown in the UI
 const send = (p, msg) => { if (p && !p.sock.destroyed) p.sock.write(JSON.stringify(msg) + '\n'); };
 const toRoom = (room, msg, except) => room.players.forEach((id) => id !== except && send(players.get(id), msg));
 
 function roomList() {
-  return [...rooms.values()].map((r) => ({ id: r.id, name: r.name, laps: r.laps, difficulty: r.difficulty, count: r.players.length, max: MAX_PLAYERS, state: r.state }));
+  return [...rooms.values()].map((r) => ({ id: r.id, name: r.name, laps: r.laps, difficulty: r.difficulty, creator: r.creator, count: r.players.length, max: MAX_PLAYERS, state: r.state }));
 }
 function pushRooms() { const list = roomList(); for (const p of players.values()) send(p, { t: 'rooms', rooms: list }); }
 function pushRoom(room) {
   toRoom(room, {
-    t: 'room', id: room.id, name: room.name, laps: room.laps, difficulty: room.difficulty, host: room.host, state: room.state,
+    t: 'room', id: room.id, name: room.name, laps: room.laps, difficulty: room.difficulty, creator: room.creator, host: room.host, state: room.state,
     players: room.players.map((id) => { const p = players.get(id); return { id, name: p.name, char: p.char, points: room.scores[p.name] || 0 }; }),
   });
 }
@@ -85,7 +87,12 @@ function handle(p, m) {
   const room = rooms.get(p.room);
 
   switch (m.t) {
-    case 'create': return send(p, { t: 'error', msg: 'Only the server can create rooms' });
+    case 'create': { // a player creates a room from the lobby and becomes its creator
+      if (room) leave(p);
+      const r = makeRoom(clean(m.name, 24) || `${p.name}'s room`, m.laps, m.difficulty, p.id);
+      log(`room #${r.id} "${r.name}" created by ${p.name}`);
+      return join(p, r);
+    }
     case 'join': {
       const r = rooms.get(m.room);
       if (!r) return send(p, { t: 'error', msg: 'Room not found' });
@@ -102,7 +109,11 @@ function handle(p, m) {
       if (room) pushRoom(room);
       return;
     }
-    case 'start': return send(p, { t: 'error', msg: 'Waiting for the server to start the race' });
+    case 'start': { // the creator starts their own room; server-created rooms are started from the dashboard
+      if (!room || room.creator !== p.id) return send(p, { t: 'error', msg: 'Only the room creator can start this race' });
+      if (room.state !== 'lobby') return;
+      return startRace(room, m);
+    }
   }
   if (!room || !room.race) return;
   const race = room.race;
@@ -148,6 +159,15 @@ function handle(p, m) {
   }
 }
 
+function makeRoom(name, laps, difficulty, creator) {
+  const room = {
+    id: nextId++, name, creator, host: null, players: [], state: 'lobby', race: null, scores: {},
+    laps: LAP_CHOICES.includes(laps) ? laps : 3, difficulty: CLASSES.includes(difficulty) ? difficulty : 'normal',
+  };
+  rooms.set(room.id, room);
+  return room;
+}
+
 function join(p, room) {
   const taken = new Set(room.players.map((id) => players.get(id).char));
   if (taken.has(p.char)) p.char = [...Array(CHARS).keys()].find((c) => !taken.has(c));
@@ -166,10 +186,12 @@ function leave(p) {
   log(`${p.name} left room #${room.id}`);
   if (!room.players.length) {
     clearTimeout(room.race?.timer); clearTimeout(room.race?.loadTimer);
+    if (room.creator != null) rooms.delete(room.id); // an empty player room is removed
     room.race = null; room.state = 'lobby'; room.host = null;
     return pushRooms(); // server-created rooms stay available for the next clients
   }
   if (room.host === p.id) room.host = room.players[0]; // host migration: new host also takes over the bots
+  if (room.creator === p.id) room.creator = room.players[0]; // the next player can now start the room
   if (room.race) {
     const karts = room.race.grid.map((g, i) => (g.owner === p.id ? i : -1)).filter((i) => i >= 0);
     toRoom(room, { t: 'left', id: p.id, name: p.name, karts });
@@ -200,7 +222,8 @@ function startRace(room, m) {
   const grid = humans.map((h) => ({ owner: h.id, name: h.name, char: h.char }));
   while (grid.length < KARTS) { const c = free.length ? free.shift() : grid.length % CHARS; grid.push({ owner: null, name: null, char: c }); }
   for (let i = grid.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; [grid[i], grid[j]] = [grid[j], grid[i]]; } // random grid slots
-  if ([1, 3, 5].includes(m.laps)) room.laps = m.laps;
+  if (LAP_CHOICES.includes(m.laps)) room.laps = m.laps;
+  if (CLASSES.includes(m.difficulty)) room.difficulty = m.difficulty;
   room.state = 'loading';
   room.race = {
     id: nextRaceId++, lastSeq: new Map(),
@@ -322,9 +345,9 @@ require('./admin')({
   create: (m) => {
     const name = clean(m.name, 24);
     if (!name) fail(400, 'Enter a room name');
-    if (![1, 3, 5].includes(m.laps) || !['easy', 'normal', 'hard'].includes(m.difficulty)) fail(400, 'Choose a valid lap count and class');
-    const room = { id: nextId++, name, laps: m.laps, difficulty: m.difficulty, host: null, players: [], state: 'lobby', race: null, scores: {} };
-    rooms.set(room.id, room); pushRooms();
+    if (!LAP_CHOICES.includes(m.laps) || !CLASSES.includes(m.difficulty)) fail(400, 'Choose a valid lap count and class');
+    const room = makeRoom(name, m.laps, m.difficulty, null); // null creator: only the dashboard starts it
+    pushRooms();
     log(`server created room #${room.id} "${room.name}"`);
     return { id: room.id };
   },

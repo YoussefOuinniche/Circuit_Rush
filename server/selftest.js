@@ -43,9 +43,6 @@ function client() {
   a.sendUdp({ t: 'ping', ts: 1 }); b.sendUdp({ t: 'ping', ts: 1 }); await wait(100);
   assert.ok(a.udpMsgs.some((m) => m.t === 'pong'), 'pong over UDP');
 
-  a.send({ t: 'create', name: 'Not allowed' }); await wait(100);
-  assert.equal(a.last('error').msg, 'Only the server can create rooms');
-  assert.equal((await admin()).data.rooms.length, 0, 'clients cannot create rooms');
   const created = await admin('/rooms', 'POST', { name: 'Room <1>', laps: 1, difficulty: 'easy' });
   assert.equal(created.status, 201);
   const roomId = created.data.id;
@@ -60,7 +57,7 @@ function client() {
 
   a.send({ t: 'start' }); b.send({ t: 'start' }); await wait(100);
   assert.equal(b.count('race_start'), 0);
-  assert.equal(a.last('error').msg, 'Waiting for the server to start the race', 'even the bot-driving client cannot start');
+  assert.equal(a.last('error').msg, 'Only the room creator can start this race', 'players cannot start a server room');
   const errorsBeforeRace = a.count('error');
   assert.equal((await admin(`/rooms/${roomId}/start`, 'POST')).status, 200);
   await wait(100);
@@ -136,6 +133,25 @@ function client() {
   assert.equal((await admin(`/rooms/${roomId}`, 'DELETE')).status, 200); await wait(100);
   assert.equal(late.last('room_closed').name, 'Room 1', 'operator closure returns clients to lobby');
   assert.equal(late.last('rooms').rooms.length, 0, 'room removal is pushed to clients');
+
+  // Players can also create their own room from the lobby; only its creator starts it.
+  const guest = client();
+  await wait(50); guest.send({ t: 'login', name: 'Guest' }); await wait(100);
+  late.send({ t: 'create', name: 'Late <Room>', laps: 5, difficulty: 'hard' }); await wait(100);
+  const own = late.last('room');
+  assert.equal(own.name, 'Late Room', 'player room name sanitized');
+  assert.equal(own.creator, late.last('login_ok').id, 'creator recorded');
+  assert.equal(guest.last('rooms').rooms[0].name, 'Late Room', 'player room listed in every lobby');
+  guest.send({ t: 'join', room: own.id }); await wait(100);
+  guest.send({ t: 'start' }); await wait(100);
+  assert.equal(guest.count('race_start'), 0, 'only the creator can start');
+  late.send({ t: 'start', laps: 1, difficulty: 'easy' }); await wait(100);
+  assert.equal(guest.last('race_start').laps, 1, 'creator chooses laps');
+  assert.equal(guest.last('race_start').difficulty, 'easy', 'creator chooses class');
+  late.sock.destroy(); await wait(150);
+  assert.equal(guest.last('room').creator, guest.last('login_ok').id, 'creator role passes to the next player');
+  guest.send({ t: 'leave' }); await wait(100);
+  assert.equal(guest.last('rooms').rooms.length, 0, 'empty player room is removed');
   console.log('selftest OK');
   srv.kill(); process.exit(0);
 })().catch((e) => { console.error('selftest FAILED', e); srv.kill(); process.exit(1); });

@@ -136,6 +136,7 @@ const hud = new HUD(uiRoot);
 const menu = new Menu(uiRoot, {
   onStart: (settings) => {
     if (!net.available) return startRace(settings);
+    if (menu.isCreator) net.send({ t: 'start', laps: settings.laps, difficulty: settings.difficulty });
   },
   onResume: () => resume(),
   onRestart: () => { if (world && world.mp) return resume(); menu.hideAll(); startRace(lastSettings); },
@@ -144,6 +145,7 @@ const menu = new Menu(uiRoot, {
   // multiplayer menus
   onTitle: net.available ? () => showNetMenu() : undefined,
   onLogin: (name) => { pendingName = name; net.connect(); },
+  onCreate: (name) => net.send({ t: 'create', name }),
   onJoin: (room) => net.send({ t: 'join', room }),
   onLeave: () => { net.send({ t: 'leave' }); net.room = null; showNetMenu(); },
   onChar: (char) => { if (net.room) net.send({ t: 'char', char }); },

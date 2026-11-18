@@ -212,10 +212,16 @@ export class Menu {
     s.innerHTML = `
       <div class="pause-panel net-panel">
         <div class="pause-title">AVAILABLE ROOMS</div>
-        <p class="lobby-hint">Choose a room created by the server. This list updates automatically.</p>
+        <p class="lobby-hint">Join a room or create your own. This list updates automatically.</p>
         <div class="room-list" aria-label="Available rooms" aria-live="polite"></div>
+        <input class="in-room" maxlength="24" placeholder="New room name" aria-label="New room name" spellcheck="false">
+        <button class="btn primary create-btn">CREATE ROOM</button>
         <div class="net-status" role="status"></div>
       </div>`;
+    const input = s.querySelector('.in-room');
+    const create = () => this.h.onCreate && this.h.onCreate(input.value.trim());
+    s.querySelector('.create-btn').addEventListener('click', create);
+    input.addEventListener('keydown', (e) => { if (e.code === 'Enter' || e.code === 'NumpadEnter') create(); });
     this.roomListEl = s.querySelector('.room-list');
     this.lobbyStatus = s.querySelector('.net-status');
   }
@@ -229,7 +235,7 @@ export class Menu {
 
   setRooms(rooms) {
     const L = this.roomListEl;
-    L.innerHTML = rooms.length ? '' : '<div class="room-empty">Waiting for the server to open a room…</div>';
+    L.innerHTML = rooms.length ? '' : '<div class="room-empty">No rooms yet: create one below.</div>';
     for (const r of rooms) {
       const row = el('div', 'room-row', L, `<span class="rn"></span><span>${r.count}/${r.max}</span>`);
       row.querySelector('.rn').textContent = r.name;
@@ -244,17 +250,25 @@ export class Menu {
   /** Room view = the character select screen plus a player list. room = null for single-player. */
   setRoom(room, myId) {
     this.mp = !!room;
+    // the player who created the room chooses its settings and starts it; server rooms start from the dashboard
+    const creator = !!room && room.creator === myId;
+    const newRoom = !room || this._roomId !== room.id;
+    this.isCreator = creator;
+    this._roomId = room ? room.id : null;
     if (!room) this._sentChar = null;
     this.roomEl.style.display = room ? '' : 'none';
     this.selectEl.classList.toggle('in-room', !!room); // compact preview to make room for the player list
     const btn = this.optEls[2];
-    btn.textContent = !room ? 'RACE!' : 'WAITING FOR SERVER';
-    btn.disabled = !!room;
-    btn.classList.toggle('disabled', !!room);
+    const waiting = !!room && !creator;
+    btn.textContent = !room ? 'RACE!' : creator ? 'START RACE' : room.creator == null ? 'WAITING FOR SERVER' : 'WAITING FOR CREATOR';
+    btn.disabled = waiting;
+    btn.classList.toggle('disabled', waiting);
     if (!room) return;
-    this.lapsIndex = Math.max(0, LAPS.indexOf(room.laps));
-    this.diffIndex = Math.max(0, DIFFS.indexOf(room.difficulty));
-    this._refreshOpts();
+    if (!creator || newRoom) { // keep the creator's own unsent choices between room updates
+      this.lapsIndex = Math.max(0, LAPS.indexOf(room.laps));
+      this.diffIndex = Math.max(0, DIFFS.indexOf(room.difficulty));
+      this._refreshOpts();
+    }
     const me = room.players.find((p) => p.id === myId);
     // adopt the server's racer on joining, or when it refused ours (taken). Hover alone never changes it.
     if (me && me.char !== this._sentChar) { this._sentChar = me.char; this._setChar(me.char, true); }
@@ -263,7 +277,7 @@ export class Menu {
     for (const p of room.players) {
       const row = el('div', 'rp', this.roomEl, '<span class="chip"></span><span class="nm"></span><span class="pts"></span>');
       row.querySelector('.chip').style.background = hex(CHARACTERS[p.char].color);
-      row.querySelector('.nm').textContent = p.name + (p.id === myId ? ' (you)' : '');
+      row.querySelector('.nm').textContent = p.name + (p.id === room.creator ? ' ★' : '') + (p.id === myId ? ' (you)' : '');
       row.querySelector('.pts').textContent = p.points + ' PTS';
     }
   }
@@ -340,7 +354,7 @@ export class Menu {
     this.optEls.forEach((o, j) => o.classList.toggle('focus', this.zone === 'opts' && j === this.optIndex));
   }
   _changeOpt(d) {
-    if (this.mp) return; // the server operator chooses race settings
+    if (this.mp && !this.isCreator) return; // the room creator or server operator chooses race settings
     if (this.optIndex === 0) this.diffIndex = (this.diffIndex + d + DIFFS.length) % DIFFS.length;
     else if (this.optIndex === 1) this.lapsIndex = (this.lapsIndex + d + LAPS.length) % LAPS.length;
     else return;
@@ -350,7 +364,7 @@ export class Menu {
     v.classList.remove('bump'); void v.offsetWidth; v.classList.add('bump');
   }
   _start() {
-    if (this.screen !== 'select' || this.mp) return;
+    if (this.screen !== 'select' || (this.mp && !this.isCreator)) return;
     try { localStorage.setItem('tkr-settings', JSON.stringify({ charIndex: this.charIndex, diffIndex: this.diffIndex, lapsIndex: this.lapsIndex })); } catch (e) { /* ignore */ }
     bus.emit('ui:confirm');
     this.h.onStart && this.h.onStart(this.settings);
